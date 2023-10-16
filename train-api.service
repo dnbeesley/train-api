@@ -1,0 +1,10 @@
+[Unit]
+Description=Train WebAPI
+
+[Service]
+ExecStart=/opt/train-api/train-api
+SyslogIdentifier=TrainAPI
+WorkingDirectory=/opt/train-api/
+
+[Install]
+WantedBy=multi-user.target
