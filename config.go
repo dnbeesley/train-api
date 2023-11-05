@@ -7,6 +7,7 @@ import (
 
 type ApiConfig struct {
 	BindAddress string           `json:"bindAddress"`
+	CorsOrigins []string         `json:"corsOrigins"`
 	MqttServer  MqttServerConfig `json:"mqttServer"`
 	TopicPrefix string           `json:"topicPrefix"`
 }

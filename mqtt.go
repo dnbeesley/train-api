@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
@@ -17,6 +18,9 @@ type JsonMessage struct {
 	Topic   string `json:"topic"`
 }
 
+const pongWait = 60 * time.Second
+const pingPeriod = (pongWait * 9) / 10
+
 var upgrader = websocket.Upgrader{}
 
 var connectHandler mqtt.OnConnectHandler = func(client mqtt.Client) {
@@ -27,14 +31,8 @@ var connectLostHandler mqtt.ConnectionLostHandler = func(client mqtt.Client, err
 	fmt.Printf("Connect lost: %v\n", err)
 }
 
-var getMessageHandler = func(conn *websocket.Conn) mqtt.MessageHandler {
-	return func(c mqtt.Client, m mqtt.Message) {
-		conn.WriteJSON(parseMessage(m))
-	}
-}
-
-var parseMessage = func(m mqtt.Message) JsonMessage {
-	return JsonMessage{
+var parseMessage = func(m mqtt.Message) *JsonMessage {
+	return &JsonMessage{
 		Payload: string(m.Payload()),
 		Topic:   m.Topic(),
 	}
@@ -65,8 +63,43 @@ var websocketHandler = func(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var subscribedMessages chan *JsonMessage = make(chan *JsonMessage)
 	topic := path.Join(config.TopicPrefix, "#")
-	client.Subscribe(topic, 1, getMessageHandler(conn))
+	client.Subscribe(topic, 1, func(c mqtt.Client, m mqtt.Message) {
+		subscribedMessages <- parseMessage(m)
+	})
+
+	go func() {
+		var err error
+		var jsonMessage *JsonMessage
+		ticker := time.NewTicker(pingPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case jsonMessage = <-subscribedMessages:
+				err = conn.WriteJSON(jsonMessage)
+				switch err.(type) {
+				case *websocket.CloseError:
+					return
+				default:
+					fmt.Printf("Error writing to websocket: %v\n", err)
+				}
+			case <-ticker.C:
+				err = conn.WriteMessage(websocket.PingMessage, nil)
+				switch err.(type) {
+				case *websocket.CloseError:
+					return
+				default:
+					fmt.Printf("Error writing to websocket: %v\n", err)
+				}
+			}
+		}
+	}()
+
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 
 	var payload []byte
 	for err == nil {
@@ -87,7 +120,6 @@ var websocketHandler = func(w http.ResponseWriter, r *http.Request) {
 	switch err.(type) {
 	case *websocket.CloseError:
 		client.Disconnect(1000)
-		break
 	default:
 		fmt.Printf("Error reading from websocket: %v\n", err)
 	}
